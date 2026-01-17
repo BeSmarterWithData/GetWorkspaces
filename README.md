@@ -13,7 +13,6 @@ This script provides a simple, streamlined way to:
 ## Features
 
 - ✅ **Automatic Module Installation** - Installs ImportExcel and MicrosoftPowerBIMgmt if needed
-- ✅ **MSAL Authentication** - Uses secure Microsoft Authentication Library for Public Cloud
 - ✅ **Smart Access Detection** - Automatically detects if you have admin API access
 - ✅ **Dual Mode Operation**:
   - **Admin Mode**: Retrieves up to 5000 workspaces using admin APIs
