@@ -1,0 +1,190 @@
+# ================================================================================
+# SIMPLE WORKSPACE EXPORT SCRIPT
+# ================================================================================
+# This script:
+# 1. Installs required modules (ImportExcel, MicrosoftPowerBIMgmt)
+# 2. Logs in to Power BI using MSAL (Public Cloud)
+# 3. Checks if admin API access is available
+# 4. If admin API succeeds: Retrieves up to 5000 workspaces using admin API
+# 5. If admin API doesn't succeed: Retrieves workspaces as regular user
+# 6. Outputs results to Excel file
+# ================================================================================
+
+# Set error preferences
+$ErrorActionPreference = "SilentlyContinue"
+$WarningPreference = "SilentlyContinue"
+
+# Set execution policy for this session
+if ((Get-ExecutionPolicy) -ne 'Bypass') {
+    Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process -Force
+}
+
+Write-Host "===============================================" -ForegroundColor Cyan
+Write-Host "Simple Workspace Export Script" -ForegroundColor Cyan
+Write-Host "===============================================" -ForegroundColor Cyan
+Write-Host ""
+
+# =============================
+# Step 1: Install Required Modules
+# =============================
+Write-Host "[1/6] Installing required modules..." -ForegroundColor Yellow
+
+$requiredModules = @('ImportExcel', 'MicrosoftPowerBIMgmt')
+foreach ($module in $requiredModules) {
+    Write-Host "  - Checking module: $module" -ForegroundColor Gray
+    if (-not (Import-Module $module -PassThru -ErrorAction Ignore)) {
+        Write-Host "    Installing $module..." -ForegroundColor Gray
+        Install-Module -Name $module -Scope CurrentUser -Force -AllowClobber
+    }
+    Import-Module $module -ErrorAction Stop
+    Write-Host "    $module loaded successfully" -ForegroundColor Green
+}
+
+Write-Host "[SUCCESS] All required modules loaded" -ForegroundColor Green
+Write-Host ""
+
+# =============================
+# Step 2: Login using MSAL (Public Cloud)
+# =============================
+Write-Host "[2/6] Logging in to Power BI (Public Cloud)..." -ForegroundColor Yellow
+
+try {
+    # Connect to Power BI Service using MSAL (Public Cloud is default)
+    Connect-PowerBIServiceAccount | Out-Null
+    Write-Host "[SUCCESS] Successfully authenticated to Power BI" -ForegroundColor Green
+} catch {
+    Write-Host "[ERROR] Failed to authenticate: $_" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host ""
+
+# =============================
+# Step 3: Check for Admin API Access
+# =============================
+Write-Host "[3/6] Checking for admin API access..." -ForegroundColor Yellow
+
+$hasAdminAccess = $false
+$adminWorkspacesUrl = "https://api.powerbi.com/v1.0/myorg/admin/groups?`$top=1"
+
+try {
+    # Try to call admin API with top=1 to check access
+    $testResponse = Invoke-PowerBIRestMethod -Method GET -Url $adminWorkspacesUrl -ErrorAction Stop
+    
+    if ($testResponse) {
+        $hasAdminAccess = $true
+        Write-Host "[SUCCESS] Admin API access confirmed" -ForegroundColor Green
+    }
+} catch {
+    Write-Host "[INFO] Admin API access not available - will use regular user API" -ForegroundColor Yellow
+}
+
+Write-Host ""
+
+# =============================
+# Step 4 & 5: Retrieve Workspaces
+# =============================
+
+# Initialize workspaces array
+$workspaces = @()
+
+if ($hasAdminAccess) {
+    # Admin API - Get top 5000 workspaces
+    Write-Host "[4/6] Retrieving workspaces using admin API (top 5000)..." -ForegroundColor Yellow
+    
+    $adminUrl = "https://api.powerbi.com/v1.0/myorg/admin/groups?`$top=5000"
+    
+    try {
+        $response = Invoke-PowerBIRestMethod -Method GET -Url $adminUrl | ConvertFrom-Json
+        
+        if ($response.value) {
+            $workspaces = $response.value
+            Write-Host "[SUCCESS] Retrieved $($workspaces.Count) workspaces using admin API" -ForegroundColor Green
+        } else {
+            Write-Host "[WARNING] No workspaces found" -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host "[ERROR] Failed to retrieve workspaces: $_" -ForegroundColor Red
+        exit 1
+    }
+    
+} else {
+    # Regular User API - Get workspaces user has access to
+    Write-Host "[4/6] Retrieving workspaces as regular user..." -ForegroundColor Yellow
+    
+    $userUrl = "https://api.powerbi.com/v1.0/myorg/groups?`$top=5000"
+    
+    try {
+        $response = Invoke-PowerBIRestMethod -Method GET -Url $userUrl | ConvertFrom-Json
+        
+        if ($response.value) {
+            $workspaces = $response.value
+            Write-Host "[SUCCESS] Retrieved $($workspaces.Count) workspaces as regular user" -ForegroundColor Green
+        } else {
+            Write-Host "[WARNING] No workspaces found" -ForegroundColor Yellow
+        }
+    } catch {
+        Write-Host "[ERROR] Failed to retrieve workspaces: $_" -ForegroundColor Red
+        exit 1
+    }
+}
+
+Write-Host ""
+
+# =============================
+# Step 6: Output to Excel
+# =============================
+Write-Host "[5/6] Preparing data for Excel export..." -ForegroundColor Yellow
+
+# Prepare workspace data for export using more efficient collection
+$exportData = $workspaces | ForEach-Object {
+    [PSCustomObject]@{
+        'Workspace ID' = $_.id
+        'Workspace Name' = $_.name
+        'Type' = $_.type
+        'State' = $_.state
+        'Is Read Only' = $_.isReadOnly
+        'Is On Dedicated Capacity' = $_.isOnDedicatedCapacity
+        'Capacity ID' = $_.capacityId
+        'Description' = $_.description
+    }
+}
+
+Write-Host "[SUCCESS] Prepared $($exportData.Count) workspaces for export" -ForegroundColor Green
+Write-Host ""
+
+# =============================
+# Export to Excel
+# =============================
+Write-Host "[6/6] Exporting to Excel..." -ForegroundColor Yellow
+
+# Set output file path
+$timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$outputPath = ".\PowerBI_Workspaces_Export_$timestamp.xlsx"
+
+try {
+    # Export to Excel
+    $exportData | Export-Excel -Path $outputPath -AutoSize -AutoFilter -TableName "Workspaces" -WorksheetName "Workspaces" -FreezeTopRow -BoldTopRow
+    
+    Write-Host "[SUCCESS] Data exported successfully!" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "===============================================" -ForegroundColor Cyan
+    Write-Host "Export Details:" -ForegroundColor Cyan
+    Write-Host "  - File: $outputPath" -ForegroundColor White
+    Write-Host "  - Workspaces: $($exportData.Count)" -ForegroundColor White
+    Write-Host "  - Access Type: $(if ($hasAdminAccess) { 'Admin API (Top 5000)' } else { 'Regular User' })" -ForegroundColor White
+    Write-Host "===============================================" -ForegroundColor Cyan
+    Write-Host ""
+    
+    # Try to open the file
+    if (Test-Path $outputPath) {
+        Write-Host "Opening Excel file..." -ForegroundColor Gray
+        Invoke-Item $outputPath
+    }
+    
+} catch {
+    Write-Host "[ERROR] Failed to export to Excel: $_" -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "Script completed successfully!" -ForegroundColor Green
